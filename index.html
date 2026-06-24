@@ -1,0 +1,959 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>피자나라 경제교실</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
+
+  <style>
+    body {
+      font-family: "Pretendard", "Noto Sans KR", system-ui, -apple-system, sans-serif;
+    }
+
+    .pizza-base {
+      background:
+        radial-gradient(circle at 50% 50%, #ffd98f 0%, #ffc96e 62%, #dd8f3e 63%, #bf6d21 77%, #8a4d17 100%);
+      box-shadow:
+        inset 0 0 0 10px rgba(255,255,255,0.08),
+        inset 0 0 30px rgba(133, 68, 0, 0.22),
+        0 12px 30px rgba(0,0,0,0.14);
+    }
+
+    .pizza-sauce::before {
+      content: "";
+      position: absolute;
+      inset: 11%;
+      border-radius: 9999px;
+      background: radial-gradient(circle at 50% 40%, rgba(230,63,42,0.95), rgba(179,37,20,0.92));
+      opacity: 0.95;
+      z-index: 1;
+    }
+
+    .pizza-cheese::after {
+      content: "";
+      position: absolute;
+      inset: 14%;
+      border-radius: 9999px;
+      background:
+        radial-gradient(circle at 40% 40%, rgba(255,245,187,0.9), rgba(255,221,103,0.82)),
+        radial-gradient(circle at 60% 60%, rgba(255,255,255,0.18), rgba(255,255,255,0));
+      z-index: 2;
+      opacity: 0.95;
+    }
+
+    .pepperoni-piece {
+      width: 14px;
+      height: 14px;
+      border-radius: 9999px;
+      background: radial-gradient(circle at 35% 35%, #ff9a9a 0%, #d62828 45%, #9b111e 100%);
+      border: 1.5px solid rgba(120, 0, 0, 0.35);
+      box-shadow:
+        inset 1px 1px 2px rgba(255,255,255,0.25),
+        0 1px 2px rgba(0,0,0,0.18);
+    }
+
+    .break-anywhere {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+  </style>
+</head>
+<body class="bg-gradient-to-b from-amber-50 to-orange-100 min-h-screen text-slate-800">
+  <div id="app"></div>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyBHLe_wG_zRkQTfz_1Rq2CGKrSSGDX4b10",
+      authDomain: "pizza-economy-class.firebaseapp.com",
+      projectId: "pizza-economy-class",
+      storageBucket: "pizza-economy-class.firebasestorage.app",
+      messagingSenderId: "253898972716",
+      appId: "1:253898972716:web:5433d5ec549143c0f37b89"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+
+    const MAX_MAKING_BUDGET = 30000;
+    const MAX_BUYING_BUDGET = 50000;
+    const TOPPING_VISUAL_MULTIPLIER = 6;
+
+    const state = {
+      user: null,
+      authReady: false,
+
+      mode: "start",
+      roomId: "",
+      roomData: null,
+      participants: [],
+      pizzas: [],
+
+      teacherNameInput: "",
+      joinRoomCodeInput: "",
+      joinStudentNameInput: "",
+
+      studentName: "",
+      mySessionId: getOrCreateStudentSessionId(),
+
+      pizzaName: "",
+      selectedIngredients: {},
+      toppingLayout: {},
+      buyerWallet: MAX_BUYING_BUDGET,
+      purchasedPizzas: [],
+
+      unsubscribers: [],
+      alertMessage: null
+    };
+
+    const INGREDIENTS = [
+      { id: "edge_cheese", name: "치즈 크러스트", emoji: "🧀", price: 4000, category: "edge", max: 1 },
+      { id: "edge_sweetpotato", name: "고구마 크러스트", emoji: "🍠", price: 4500, category: "edge", max: 1 },
+
+      { id: "sauce_tomato", name: "토마토 소스", emoji: "🍅", price: 1500, category: "sauce", max: 1 },
+      { id: "sauce_cream", name: "크림 소스", emoji: "🥛", price: 1800, category: "sauce", max: 1 },
+
+      { id: "cheese_mozzarella", name: "모짜렐라 치즈", emoji: "🧀", price: 3000, category: "cheese", max: 1 },
+      { id: "cheese_cheddar", name: "체다 치즈", emoji: "🟨", price: 3200, category: "cheese", max: 1 },
+
+      { id: "top_pepperoni", name: "페퍼로니", emoji: "pepperoni", price: 3500, category: "topping" },
+      { id: "top_mushroom", name: "버섯", emoji: "🍄", price: 2500, category: "topping" },
+      { id: "top_olive", name: "올리브", emoji: "🫒", price: 2200, category: "topping" },
+      { id: "top_pineapple", name: "파인애플", emoji: "🍍", price: 2800, category: "topping" },
+      { id: "top_shrimp", name: "새우", emoji: "🍤", price: 4200, category: "topping" },
+      { id: "top_bulgogi", name: "불고기", emoji: "🥩", price: 4300, category: "topping" },
+      { id: "top_bacon", name: "베이컨", emoji: "🥓", price: 3900, category: "topping" },
+      { id: "top_onion", name: "양파", emoji: "🧅", price: 1800, category: "topping" },
+      { id: "top_potato", name: "감자", emoji: "🥔", price: 2400, category: "topping" },
+      { id: "top_hanwoo", name: "한우", emoji: "🥩", price: 5200, category: "topping" },
+      { id: "top_corn", name: "옥수수콘", emoji: "🌽", price: 2000, category: "topping" },
+      { id: "top_sausage", name: "소시지", emoji: "🌭", price: 3400, category: "topping" },
+      { id: "top_sweetpotatomousse", name: "고구마무스", emoji: "🍠", price: 3100, category: "topping" },
+      { id: "top_paprika", name: "파프리카", emoji: "🫑", price: 2300, category: "topping" },
+      { id: "top_chicken", name: "치킨", emoji: "🍗", price: 4100, category: "topping" },
+      { id: "top_jalapeno", name: "할라피뇨", emoji: "🌶️", price: 2100, category: "topping" },
+      { id: "top_tomato", name: "토마토", emoji: "🍅", price: 1900, category: "topping" },
+      { id: "top_crabstick", name: "게맛살", emoji: "🦀", price: 3300, category: "topping" },
+
+      { id: "side_pickle", name: "피클", emoji: "🥒", price: 1000, category: "side" },
+      { id: "side_cola", name: "콜라", emoji: "🥤", price: 2000, category: "side" },
+      { id: "side_salad", name: "샐러드", emoji: "🥗", price: 1800, category: "side" },
+      { id: "side_garlicdip", name: "갈릭 디핑 소스", emoji: "🧄", price: 1200, category: "side" }
+    ];
+
+    function getOrCreateStudentSessionId() {
+      const key = "pizza_student_session_id";
+      const saved = localStorage.getItem(key);
+      if (saved) return saved;
+      const id = "student_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
+      localStorage.setItem(key, id);
+      return id;
+    }
+
+    function roomsRef() {
+      return db.collection("pizzaEconomyRooms");
+    }
+
+    function roomRef(roomId) {
+      return roomsRef().doc(roomId);
+    }
+
+    function participantsRef(roomId) {
+      return roomRef(roomId).collection("participants");
+    }
+
+    function pizzasRef(roomId) {
+      return roomRef(roomId).collection("pizzas");
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (m) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+      }[m]));
+    }
+
+    function currency(value) {
+      return `${Number(value || 0).toLocaleString("ko-KR")}원`;
+    }
+
+    function showAlert(message) {
+      state.alertMessage = message;
+      render();
+      setTimeout(() => {
+        if (state.alertMessage === message) {
+          state.alertMessage = null;
+          render();
+        }
+      }, 2200);
+    }
+
+    function cleanupSubscriptions() {
+      state.unsubscribers.forEach((fn) => {
+        try { fn(); } catch (e) {}
+      });
+      state.unsubscribers = [];
+    }
+
+    function makeRoomCode() {
+      const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+      let s = "";
+      for (let i = 0; i < 6; i++) {
+        s += chars[Math.floor(Math.random() * chars.length)];
+      }
+      return s;
+    }
+
+    function clamp(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    function getIngredientById(id) {
+      return INGREDIENTS.find((x) => x.id === id);
+    }
+
+    function selectedIngredientEntries(obj = state.selectedIngredients) {
+      return Object.entries(obj).filter(([_, count]) => Number(count) > 0);
+    }
+
+    function ingredientCostFromObject(obj) {
+      return selectedIngredientEntries(obj).reduce((sum, [id, count]) => {
+        const item = getIngredientById(id);
+        return sum + ((item?.price || 0) * Number(count || 0));
+      }, 0);
+    }
+
+    function calculateIngredientCost() {
+      return ingredientCostFromObject(state.selectedIngredients);
+    }
+
+    function selectedPrimary(category, obj = state.selectedIngredients) {
+      const found = selectedIngredientEntries(obj)
+        .map(([id, count]) => ({ ...getIngredientById(id), count }))
+        .find((x) => x && x.category === category);
+      return found || null;
+    }
+
+    function selectedToppings(obj = state.selectedIngredients) {
+      return selectedIngredientEntries(obj)
+        .map(([id, count]) => ({ ...getIngredientById(id), count }))
+        .filter((x) => x && x.category === "topping");
+    }
+
+    function selectedSides(obj = state.selectedIngredients) {
+      return selectedIngredientEntries(obj)
+        .map(([id, count]) => ({ ...getIngredientById(id), count }))
+        .filter((x) => x && x.category === "side");
+    }
+
+    function getMyPizza() {
+      return state.pizzas.find((p) => p.ownerSessionId === state.mySessionId) || null;
+    }
+
+    function revenueOfPizza(pizza) {
+      return (pizza.buyers?.length || 0) * (pizza.price || 0);
+    }
+
+    function sortedPizzas() {
+      return [...state.pizzas].sort((a, b) => {
+        const rev = revenueOfPizza(b) - revenueOfPizza(a);
+        if (rev !== 0) return rev;
+        return (b.buyers?.length || 0) - (a.buyers?.length || 0);
+      });
+    }
+
+    function stageLabel(status) {
+      if (status === "making") return "만들기";
+      if (status === "selling") return "판매";
+      if (status === "ranking") return "결과";
+      return status || "-";
+    }
+
+    function expandToppingsToPieces(selectedObj, toppingLayout = {}) {
+      const toppings = selectedToppings(selectedObj);
+      const rendered = [];
+
+      toppings.forEach((ing, tIndex) => {
+        const buyCount = Number(ing.count || 0);
+        const pieceTotal = buyCount * TOPPING_VISUAL_MULTIPLIER;
+
+        for (let i = 0; i < pieceTotal; i++) {
+          const key = `${ing.id}_${i}`;
+          let pos = toppingLayout[key];
+
+          if (!pos) {
+            const angle = ((Math.PI * 2) / Math.max(pieceTotal, 6)) * i + (tIndex * 0.35);
+            const ring = 18 + ((i + tIndex) % 3) * 10;
+            pos = {
+              top: clamp(50 + Math.sin(angle) * ring * 0.85, 15, 85),
+              left: clamp(50 + Math.cos(angle) * ring * 0.85, 15, 85),
+              rotate: Math.floor((i * 29 + tIndex * 17) % 360)
+            };
+          }
+
+          rendered.push({
+            key,
+            type: ing.id === "top_pepperoni" ? "pepperoni" : "emoji",
+            emoji: ing.emoji,
+            pos
+          });
+        }
+      });
+
+      return rendered;
+    }
+
+    function syncToppingLayoutForCurrentSelection() {
+      const rendered = expandToppingsToPieces(state.selectedIngredients, state.toppingLayout);
+      const validKeys = new Set(rendered.map((x) => x.key));
+      const next = { ...state.toppingLayout };
+
+      rendered.forEach((item) => {
+        if (!next[item.key]) next[item.key] = item.pos;
+      });
+
+      Object.keys(next).forEach((key) => {
+        if (!validKeys.has(key)) delete next[key];
+      });
+
+      state.toppingLayout = next;
+    }
+
+    async function initAuth() {
+      try {
+        await auth.signInAnonymously();
+      } catch (err) {
+        console.error(err);
+        showAlert("익명 로그인에 실패했습니다.");
+      }
+
+      auth.onAuthStateChanged((user) => {
+        state.user = user || null;
+        state.authReady = true;
+        render();
+      });
+    }
+
+    async function createRoom() {
+      if (!state.user) return showAlert("로그인 준비 중입니다.");
+      const teacherName = state.teacherNameInput.trim() || "교사";
+      const roomId = makeRoomCode();
+
+      try {
+        await roomRef(roomId).set({
+          roomId,
+          teacherName,
+          teacherUid: state.user.uid,
+          status: "making",
+          createdAt: Date.now()
+        });
+
+        state.mode = "teacher";
+        state.roomId = roomId;
+        await subscribeRoom(roomId);
+        showAlert(`방 ${roomId} 생성 완료`);
+      } catch (err) {
+        console.error(err);
+        showAlert("방 만들기에 실패했습니다.");
+      }
+    }
+
+    async function joinAsStudent() {
+      if (!state.user) return showAlert("로그인 준비 중입니다.");
+
+      const roomId = state.joinRoomCodeInput.trim().toUpperCase();
+      const studentName = state.joinStudentNameInput.trim();
+
+      if (!roomId) return showAlert("방 코드를 입력해 주세요.");
+      if (!studentName) return showAlert("학생 이름을 입력해 주세요.");
+
+      try {
+        const roomSnap = await roomRef(roomId).get();
+        if (!roomSnap.exists) return showAlert("방 코드를 찾을 수 없습니다.");
+
+        await participantsRef(roomId).doc(state.mySessionId).set({
+          sessionId: state.mySessionId,
+          uid: state.user.uid,
+          name: studentName,
+          wallet: MAX_BUYING_BUDGET,
+          purchasedPizzas: [],
+          joinedAt: Date.now()
+        }, { merge: true });
+
+        state.studentName = studentName;
+        state.mode = "student";
+        state.roomId = roomId;
+
+        await subscribeRoom(roomId);
+        showAlert("학생 입장 완료");
+      } catch (err) {
+        console.error(err);
+        showAlert("학생 입장에 실패했습니다.");
+      }
+    }
+
+    async function subscribeRoom(roomId) {
+      cleanupSubscriptions();
+
+      const unsubRoom = roomRef(roomId).onSnapshot((snap) => {
+        state.roomData = snap.exists ? { id: snap.id, ...snap.data() } : null;
+        render();
+      });
+
+      const unsubParticipants = participantsRef(roomId).onSnapshot((snap) => {
+        state.participants = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        const me = state.participants.find((p) => p.sessionId === state.mySessionId);
+        if (me) {
+          state.buyerWallet = Number(me.wallet || 0);
+          state.purchasedPizzas = Array.isArray(me.purchasedPizzas) ? me.purchasedPizzas : [];
+        }
+        render();
+      });
+
+      const unsubPizzas = pizzasRef(roomId).onSnapshot((snap) => {
+        state.pizzas = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        const myPizza = getMyPizza();
+        if (myPizza) {
+          state.pizzaName = myPizza.pizzaName || "";
+          state.selectedIngredients = myPizza.selectedIngredients || {};
+          state.toppingLayout = myPizza.toppingLayout || {};
+        }
+        render();
+      });
+
+      state.unsubscribers.push(unsubRoom, unsubParticipants, unsubPizzas);
+    }
+
+    async function changeStage(nextStatus) {
+      if (state.mode !== "teacher" || !state.roomId) return;
+      try {
+        await roomRef(state.roomId).update({ status: nextStatus });
+      } catch (err) {
+        console.error(err);
+        showAlert("단계 변경 실패");
+      }
+    }
+
+    function nextIngredientObjectAfterChange(item, delta) {
+      const next = { ...state.selectedIngredients };
+      const current = Number(next[item.id] || 0);
+
+      if (item.category === "topping") {
+        const nextCount = Math.max(0, current + delta);
+        if (nextCount === 0) delete next[item.id];
+        else next[item.id] = nextCount;
+      } else if (["edge", "sauce", "cheese"].includes(item.category)) {
+        if (delta > 0) {
+          Object.keys(next).forEach((id) => {
+            const found = getIngredientById(id);
+            if (found && found.category === item.category) delete next[id];
+          });
+          next[item.id] = 1;
+        } else {
+          delete next[item.id];
+        }
+      } else {
+        const nextCount = Math.max(0, current + delta);
+        if (nextCount === 0) delete next[item.id];
+        else next[item.id] = nextCount;
+      }
+
+      return next;
+    }
+
+    function changeIngredientCount(id, delta) {
+      const item = getIngredientById(id);
+      if (!item) return;
+
+      const next = nextIngredientObjectAfterChange(item, delta);
+      if (ingredientCostFromObject(next) > MAX_MAKING_BUDGET) {
+        showAlert("재료비는 30,000원을 넘을 수 없습니다.");
+        return;
+      }
+
+      state.selectedIngredients = next;
+      syncToppingLayoutForCurrentSelection();
+      render();
+    }
+
+    async function savePizza() {
+      if (state.mode !== "student" || !state.roomId) return;
+      if (!state.pizzaName.trim()) return showAlert("피자 이름을 입력해 주세요.");
+
+      const cost = calculateIngredientCost();
+
+      try {
+        await pizzasRef(state.roomId).doc(state.mySessionId).set({
+          ownerSessionId: state.mySessionId,
+          ownerName: state.studentName,
+          pizzaName: state.pizzaName.trim(),
+          selectedIngredients: state.selectedIngredients,
+          toppingLayout: state.toppingLayout,
+          ingredientCost: cost,
+          price: cost,
+          buyers: [],
+          createdAt: Date.now()
+        }, { merge: true });
+
+        showAlert("피자 저장 완료");
+      } catch (err) {
+        console.error(err);
+        showAlert("피자 저장 실패");
+      }
+    }
+
+    async function buyPizza(pizzaId) {
+      if (state.mode !== "student" || !state.roomId) return;
+      const pizza = state.pizzas.find((p) => p.id === pizzaId);
+      if (!pizza) return;
+      if (pizza.ownerSessionId === state.mySessionId) return showAlert("내 피자는 살 수 없습니다.");
+      if ((state.roomData?.status || "") !== "selling") return showAlert("지금은 판매 단계가 아닙니다.");
+      if (state.buyerWallet < pizza.price) return showAlert("예산이 부족합니다.");
+
+      try {
+        const pizzaDocRef = pizzasRef(state.roomId).doc(pizzaId);
+        const participantDocRef = participantsRef(state.roomId).doc(state.mySessionId);
+
+        await db.runTransaction(async (tx) => {
+          const pizzaSnap = await tx.get(pizzaDocRef);
+          const participantSnap = await tx.get(participantDocRef);
+
+          if (!pizzaSnap.exists || !participantSnap.exists) throw new Error("대상이 없습니다.");
+
+          const pizzaData = pizzaSnap.data();
+          const participantData = participantSnap.data();
+
+          const wallet = Number(participantData.wallet || 0);
+          if (wallet < pizzaData.price) throw new Error("예산 부족");
+
+          const buyers = Array.isArray(pizzaData.buyers) ? pizzaData.buyers.slice() : [];
+          buyers.push({
+            sessionId: state.mySessionId,
+            name: state.studentName,
+            boughtAt: Date.now()
+          });
+
+          const purchased = Array.isArray(participantData.purchasedPizzas) ? participantData.purchasedPizzas.slice() : [];
+          purchased.push({
+            pizzaId,
+            pizzaName: pizzaData.pizzaName,
+            ownerName: pizzaData.ownerName,
+            price: pizzaData.price,
+            boughtAt: Date.now()
+          });
+
+          tx.update(pizzaDocRef, { buyers });
+          tx.update(participantDocRef, {
+            wallet: wallet - pizzaData.price,
+            purchasedPizzas: purchased
+          });
+        });
+
+        showAlert("구매 완료");
+      } catch (err) {
+        console.error(err);
+        showAlert(err.message === "예산 부족" ? "예산이 부족합니다." : "구매 실패");
+      }
+    }
+
+    function renderPizzaVisualizer({
+      ingredients = {},
+      toppingLayout = {},
+      size = "large",
+      interactive = false,
+      pizzaId = "editor"
+    } = {}) {
+      const edge = selectedPrimary("edge", ingredients);
+      const sauce = selectedPrimary("sauce", ingredients);
+      const cheese = selectedPrimary("cheese", ingredients);
+      const toppings = expandToppingsToPieces(ingredients, toppingLayout);
+      const sides = selectedSides(ingredients);
+
+      const wrapperSize = size === "large" ? "w-80 h-80 md:w-96 md:h-96" : "w-44 h-44";
+      const fontClass = size === "large" ? "text-[22px]" : "text-[12px]";
+
+      let toppingHtml = "";
+      toppings.forEach((piece) => {
+        toppingHtml += `
+          <div
+            class="pizza-piece absolute select-none z-20 ${interactive ? "cursor-grab active:cursor-grabbing" : ""} ${fontClass}"
+            data-pizza-id="${escapeHtml(pizzaId)}"
+            data-piece-key="${escapeHtml(piece.key)}"
+            style="top:${piece.pos.top}%; left:${piece.pos.left}%; transform: translate(-50%, -50%) rotate(${piece.pos.rotate}deg); line-height:1; touch-action:${interactive ? "none" : "auto"};"
+          >
+            ${piece.type === "pepperoni" ? `<div class="pepperoni-piece"></div>` : escapeHtml(piece.emoji)}
+          </div>
+        `;
+      });
+
+      return `
+        <div class="flex flex-col items-center gap-3">
+          <div class="relative ${wrapperSize}">
+            <div class="absolute inset-0 rounded-full pizza-base ${sauce ? "pizza-sauce" : ""} ${cheese ? "pizza-cheese" : ""} border-[10px] ${edge ? "border-amber-800" : "border-amber-500"}"></div>
+            ${toppingHtml}
+          </div>
+          <div class="flex flex-wrap gap-2 justify-center">
+            ${sides.map(s => `<span class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-orange-50 border border-orange-200 font-bold text-xs">${escapeHtml(s.emoji)} ${escapeHtml(s.name)} x${s.count}</span>`).join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    function attachDragHandlers() {
+      const pieces = document.querySelectorAll(".pizza-piece");
+      pieces.forEach((el) => {
+        let dragging = false;
+        let start = { x: 0, y: 0 };
+
+        el.addEventListener("pointerdown", (e) => {
+          if (el.dataset.pizzaId !== "editor") return;
+          dragging = true;
+          start = { x: e.clientX, y: e.clientY };
+          try { el.setPointerCapture(e.pointerId); } catch (err) {}
+        });
+
+        el.addEventListener("pointermove", (e) => {
+          if (!dragging) return;
+          const parent = el.parentElement;
+          if (!parent) return;
+          const rect = parent.getBoundingClientRect();
+          const dx = e.clientX - start.x;
+          const dy = e.clientY - start.y;
+          start = { x: e.clientX, y: e.clientY };
+
+          const key = el.dataset.pieceKey;
+          const pos = state.toppingLayout[key];
+          if (!pos) return;
+
+          const pxToPctX = (dx / rect.width) * 100;
+          const pxToPctY = (dy / rect.height) * 100;
+
+          pos.left = clamp(pos.left + pxToPctX, 8, 92);
+          pos.top = clamp(pos.top + pxToPctY, 8, 92);
+
+          el.style.left = pos.left + "%";
+          el.style.top = pos.top + "%";
+        });
+
+        function stopDrag(e) {
+          if (!dragging) return;
+          dragging = false;
+          try { el.releasePointerCapture(e.pointerId); } catch (err) {}
+        }
+
+        el.addEventListener("pointerup", stopDrag);
+        el.addEventListener("pointercancel", stopDrag);
+      });
+    }
+
+    function renderStartScreen() {
+      return `
+        <main class="min-h-screen flex items-center justify-center px-4 py-10">
+          <div class="w-full max-w-5xl grid lg:grid-cols-2 gap-6">
+            <div class="bg-white rounded-3xl border-4 border-orange-200 p-8 shadow-md">
+              <h1 class="text-4xl md:text-5xl font-black text-orange-600">피자나라 경제교실</h1>
+              <p class="mt-4 text-slate-600 font-bold">선생님은 방을 만들고, 학생은 방 코드와 이름을 입력해서 입장합니다.</p>
+            </div>
+
+            <div class="space-y-6">
+              <div class="bg-white rounded-3xl border-4 border-orange-200 p-6 shadow-md">
+                <h2 class="text-2xl font-black text-orange-700">선생님</h2>
+                <input id="teacher-name-input" value="${escapeHtml(state.teacherNameInput)}" placeholder="선생님 이름" class="mt-4 w-full rounded-2xl border-2 border-orange-200 px-4 py-3 font-bold outline-none focus:border-orange-400" />
+                <button id="create-room-btn" class="mt-4 w-full py-4 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-black">방 만들기</button>
+              </div>
+
+              <div class="bg-white rounded-3xl border-4 border-emerald-200 p-6 shadow-md">
+                <h2 class="text-2xl font-black text-emerald-700">학생</h2>
+                <input id="student-room-code-input" value="${escapeHtml(state.joinRoomCodeInput)}" placeholder="방 코드" class="mt-4 w-full rounded-2xl border-2 border-emerald-200 px-4 py-3 font-bold uppercase outline-none focus:border-emerald-400" />
+                <input id="student-name-input" value="${escapeHtml(state.joinStudentNameInput)}" placeholder="학생 이름" class="mt-3 w-full rounded-2xl border-2 border-emerald-200 px-4 py-3 font-bold outline-none focus:border-emerald-400" />
+                <button id="join-room-btn" class="mt-4 w-full py-4 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-white font-black">입장하기</button>
+              </div>
+            </div>
+          </div>
+        </main>
+      `;
+    }
+
+    function renderTeacherScreen() {
+      const status = state.roomData?.status || "making";
+
+      return `
+        <main class="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
+          <div class="bg-white rounded-3xl border-4 border-orange-200 p-6 shadow-md">
+            <p class="text-sm font-black text-slate-500">학생에게 이 코드를 보여주세요</p>
+            <div class="mt-2 text-5xl font-black tracking-widest text-orange-600">${escapeHtml(state.roomId)}</div>
+            <p class="mt-3 text-slate-600 font-bold">현재 단계: ${escapeHtml(stageLabel(status))}</p>
+          </div>
+
+          <div class="grid md:grid-cols-3 gap-4">
+            <button id="stage-making-btn" class="py-4 rounded-3xl border-4 font-black ${status === "making" ? "bg-orange-500 text-white border-orange-500" : "bg-white border-orange-200 text-orange-700"}">만들기</button>
+            <button id="stage-selling-btn" class="py-4 rounded-3xl border-4 font-black ${status === "selling" ? "bg-emerald-500 text-white border-emerald-500" : "bg-white border-emerald-200 text-emerald-700"}">판매</button>
+            <button id="stage-ranking-btn" class="py-4 rounded-3xl border-4 font-black ${status === "ranking" ? "bg-sky-500 text-white border-sky-500" : "bg-white border-sky-200 text-sky-700"}">결과</button>
+          </div>
+
+          <div class="grid lg:grid-cols-2 gap-6">
+            <div class="bg-white rounded-3xl border-4 border-orange-200 p-5 shadow-md">
+              <h3 class="text-xl font-black">학생 목록</h3>
+              <div class="mt-4 space-y-3">
+                ${state.participants.length ? state.participants.map((p, i) => `
+                  <div class="rounded-2xl bg-orange-50 border border-orange-200 px-4 py-3 flex justify-between gap-3">
+                    <div class="font-black break-anywhere">${i + 1}. ${escapeHtml(p.name || "")}</div>
+                    <div class="font-bold text-slate-600">${currency(p.wallet || 0)}</div>
+                  </div>
+                `).join("") : `<p class="text-slate-500 font-bold">아직 학생이 없습니다.</p>`}
+              </div>
+            </div>
+
+            <div class="bg-white rounded-3xl border-4 border-emerald-200 p-5 shadow-md">
+              <h3 class="text-xl font-black">등록된 피자</h3>
+              <div class="mt-4 space-y-3">
+                ${state.pizzas.length ? state.pizzas.map((p, i) => `
+                  <div class="rounded-2xl bg-emerald-50 border border-emerald-200 px-4 py-3">
+                    <div class="font-black break-anywhere">${i + 1}. ${escapeHtml(p.pizzaName || "")}</div>
+                    <div class="text-sm font-bold text-slate-600 mt-1">${escapeHtml(p.ownerName || "")} · ${currency(p.price || 0)}</div>
+                  </div>
+                `).join("") : `<p class="text-slate-500 font-bold">아직 등록된 피자가 없습니다.</p>`}
+              </div>
+            </div>
+          </div>
+        </main>
+      `;
+    }
+
+    function renderIngredientCard(item) {
+      const count = Number(state.selectedIngredients[item.id] || 0);
+      return `
+        <div class="rounded-2xl border-2 px-4 py-3 bg-white border-orange-200">
+          <div class="flex items-start justify-between gap-3">
+            <div class="flex items-center gap-3">
+              <span class="text-2xl">${item.emoji === "pepperoni" ? "🔴" : escapeHtml(item.emoji)}</span>
+              <div>
+                <p class="font-black text-sm">${escapeHtml(item.name)}</p>
+                <p class="text-xs font-black text-emerald-600 mt-1">${currency(item.price)}${item.category === "topping" ? " / 1" : ""}</p>
+              </div>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <button class="ingredient-minus w-9 h-9 rounded-xl border-2 border-orange-200 bg-orange-50 font-black" data-ingredient-id="${escapeHtml(item.id)}">-</button>
+              <div class="min-w-[54px] text-center rounded-xl bg-slate-50 border border-slate-200 px-2 py-2 font-black text-sm">${count}</div>
+              <button class="ingredient-plus w-9 h-9 rounded-xl border-2 border-orange-200 bg-orange-50 font-black" data-ingredient-id="${escapeHtml(item.id)}">+1</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderStudentMaking() {
+      const cost = calculateIngredientCost();
+      return `
+        <section class="grid xl:grid-cols-12 gap-6">
+          <div class="xl:col-span-5 bg-white rounded-3xl border-4 border-orange-200 p-5 shadow-md">
+            <div class="flex items-center justify-between gap-3 mb-4">
+              <h3 class="text-xl font-black">내 피자</h3>
+              <div class="text-right">
+                <p class="text-xs font-black text-slate-500">재료비</p>
+                <p class="text-lg font-black text-emerald-600">${currency(cost)} / ${currency(MAX_MAKING_BUDGET)}</p>
+              </div>
+            </div>
+
+            <input id="pizza-name-input" value="${escapeHtml(state.pizzaName)}" placeholder="피자 이름" class="w-full rounded-2xl border-2 border-orange-200 px-4 py-3 font-bold outline-none focus:border-orange-400" />
+
+            <div class="mt-4 rounded-3xl bg-gradient-to-b from-orange-50 to-amber-50 border-2 border-orange-200 p-4">
+              ${renderPizzaVisualizer({
+                ingredients: state.selectedIngredients,
+                toppingLayout: state.toppingLayout,
+                size: "large",
+                interactive: true,
+                pizzaId: "editor"
+              })}
+            </div>
+
+            <button id="save-pizza-btn" class="mt-4 w-full py-4 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-black">제출하기</button>
+          </div>
+
+          <div class="xl:col-span-7 bg-white rounded-3xl border-4 border-orange-200 p-5 shadow-md">
+            <div class="space-y-5">
+              ${["edge", "sauce", "cheese", "topping", "side"].map(category => `
+                <div>
+                  <h4 class="text-sm font-black text-slate-700 mb-3">${category}</h4>
+                  <div class="grid md:grid-cols-2 gap-3">
+                    ${INGREDIENTS.filter(x => x.category === category).map(renderIngredientCard).join("")}
+                  </div>
+                </div>
+              `).join("")}
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderStudentSelling() {
+      const pizzas = state.pizzas.filter((p) => p.ownerSessionId !== state.mySessionId);
+      return `
+        <section class="space-y-6">
+          <div class="bg-white rounded-3xl border-4 border-emerald-200 p-5 shadow-md">
+            <h3 class="text-xl font-black">구매하기</h3>
+            <p class="text-sm font-bold text-slate-500 mt-1">남은 예산: <span class="text-emerald-600">${currency(state.buyerWallet)}</span></p>
+          </div>
+
+          <div class="grid lg:grid-cols-2 gap-5">
+            ${pizzas.length ? pizzas.map((pizza) => `
+              <div class="bg-white rounded-3xl border-4 border-orange-200 p-5 shadow-md">
+                <p class="text-xs font-black text-orange-700">판매자: ${escapeHtml(pizza.ownerName)}</p>
+                <h4 class="text-xl font-black mt-1 break-anywhere">${escapeHtml(pizza.pizzaName)}</h4>
+                <p class="text-sm text-slate-500 font-bold mt-1">판매가 <span class="text-emerald-600">${currency(pizza.price)}</span></p>
+
+                <div class="mt-4 rounded-3xl bg-orange-50 border border-orange-200 p-4">
+                  ${renderPizzaVisualizer({
+                    ingredients: pizza.selectedIngredients || {},
+                    toppingLayout: pizza.toppingLayout || {},
+                    size: "small",
+                    interactive: false,
+                    pizzaId: pizza.id
+                  })}
+                </div>
+
+                <button class="buy-pizza-btn mt-4 w-full py-3 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-white font-black" data-pizza-id="${escapeHtml(pizza.id)}">구매하기</button>
+              </div>
+            `).join("") : `
+              <div class="lg:col-span-2 bg-white rounded-3xl border-4 border-dashed border-slate-300 p-10 text-center">
+                <p class="text-lg font-black text-slate-500">아직 판매 중인 피자가 없습니다.</p>
+              </div>
+            `}
+          </div>
+        </section>
+      `;
+    }
+
+    function renderStudentRanking() {
+      const ranked = sortedPizzas();
+      return `
+        <section class="space-y-6">
+          <div class="bg-white rounded-3xl border-4 border-sky-200 p-5 shadow-md">
+            <h3 class="text-2xl font-black">결과</h3>
+          </div>
+
+          <div class="bg-white rounded-3xl border-4 border-orange-200 p-5 shadow-md">
+            <div class="space-y-3">
+              ${ranked.length ? ranked.map((pizza, i) => `
+                <div class="rounded-2xl bg-orange-50 border border-orange-200 px-4 py-4">
+                  <div class="font-black">${i + 1}위 · ${escapeHtml(pizza.pizzaName)}</div>
+                  <div class="text-sm font-bold text-slate-600 mt-1">${escapeHtml(pizza.ownerName)} · ${currency(revenueOfPizza(pizza))}</div>
+                </div>
+              `).join("") : `<p class="text-slate-500 font-bold">아직 결과가 없습니다.</p>`}
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderStudentScreen() {
+      const status = state.roomData?.status || "making";
+      return `
+        <main class="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
+          <div class="bg-white rounded-3xl border-4 border-orange-200 p-5 shadow-md flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+              <div class="text-orange-600 text-lg font-black">${escapeHtml(state.studentName)} 학생</div>
+              <p class="text-sm text-slate-600 font-bold mt-1">방 코드: <span class="text-orange-600">${escapeHtml(state.roomId)}</span></p>
+              <p class="text-sm text-slate-600 font-bold">현재 단계: <span class="text-emerald-600">${escapeHtml(stageLabel(status))}</span></p>
+            </div>
+
+            <div class="px-4 py-2 rounded-2xl bg-emerald-50 border border-emerald-200">
+              <p class="text-xs font-black text-emerald-700">구매 예산</p>
+              <p class="font-black">${currency(state.buyerWallet)}</p>
+            </div>
+          </div>
+
+          ${status === "making" ? renderStudentMaking() : ""}
+          ${status === "selling" ? renderStudentSelling() : ""}
+          ${status === "ranking" ? renderStudentRanking() : ""}
+        </main>
+      `;
+    }
+
+    function render() {
+      let html = "";
+
+      if (!state.authReady) {
+        html = `
+          <div class="min-h-screen flex items-center justify-center">
+            <div class="bg-white rounded-3xl border-4 border-orange-200 p-8 shadow-md text-center font-black text-orange-600">
+              로그인 준비 중...
+            </div>
+          </div>
+        `;
+      } else if (state.mode === "start") {
+        html = renderStartScreen();
+      } else if (state.mode === "teacher") {
+        html = renderTeacherScreen();
+      } else if (state.mode === "student") {
+        html = renderStudentScreen();
+      }
+
+      html += state.alertMessage ? `
+        <div class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-2xl bg-slate-900 text-white shadow-2xl font-black text-sm">
+          ${escapeHtml(state.alertMessage)}
+        </div>
+      ` : "";
+
+      document.getElementById("app").innerHTML = html;
+      bindEvents();
+      attachDragHandlers();
+    }
+
+    function bindEvents() {
+      const bind = (id, event, handler) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener(event, handler);
+      };
+
+      bind("teacher-name-input", "input", (e) => {
+        state.teacherNameInput = e.target.value;
+      });
+
+      bind("student-room-code-input", "input", (e) => {
+        state.joinRoomCodeInput = String(e.target.value || "").toUpperCase();
+      });
+
+      bind("student-name-input", "input", (e) => {
+        state.joinStudentNameInput = e.target.value;
+      });
+
+      bind("create-room-btn", "click", createRoom);
+      bind("join-room-btn", "click", joinAsStudent);
+
+      bind("stage-making-btn", "click", () => changeStage("making"));
+      bind("stage-selling-btn", "click", () => changeStage("selling"));
+      bind("stage-ranking-btn", "click", () => changeStage("ranking"));
+
+      bind("pizza-name-input", "input", (e) => {
+        state.pizzaName = e.target.value;
+      });
+
+      bind("save-pizza-btn", "click", savePizza);
+
+      document.querySelectorAll(".ingredient-plus").forEach((btn) => {
+        btn.addEventListener("click", () => changeIngredientCount(btn.dataset.ingredientId, 1));
+      });
+
+      document.querySelectorAll(".ingredient-minus").forEach((btn) => {
+        btn.addEventListener("click", () => changeIngredientCount(btn.dataset.ingredientId, -1));
+      });
+
+      document.querySelectorAll(".buy-pizza-btn").forEach((btn) => {
+        btn.addEventListener("click", () => buyPizza(btn.dataset.pizzaId));
+      });
+    }
+
+    (async function boot() {
+      render();
+      await initAuth();
+      render();
+    })();
+  </script>
+</body>
+</html>
